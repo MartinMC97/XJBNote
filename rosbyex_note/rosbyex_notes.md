@@ -64,7 +64,7 @@ https://github.com/ros-planning/navigation.git
 - 在这种情况下，该语义上的终点将会被解析为一系列的动作。这些动作中包括要求机器人移动到特定位置的请求。系统将目标位置数据传递至定位与路径规划层，指挥机器人进行移动。
 - 该功能可能用到的包： `smach` `behavior trees` `knowrob`。
 
-###### ROS 中 `twist` 消息和轮子转动
+##### ROS 中 `twist` 消息和轮子转动
 - ROS 使用 `geometry_msgs/Twist` 消息类型向基控制器发送消息指令。该消息一般发布在 `/cmd_vel` 话题下，包含机器人运动的线速度和角速度的信息。该消息的格式如下所示：
 ```
 geometry_msgs/Vector3 linear
@@ -80,9 +80,35 @@ geometry_msgs/Vector3 angular
 - 然而，对于在二维平面运动的机器人，系统向其发布 `twist` 消息时，只需要用到线速度的 `x` 和角速度的 `z` 两个数据项，其余数据项恒为 0。
 - 因为该类机器人只能前进或后退，旋转时也只能绕垂直于运动平面的坐标轴（即 z 轴）进行旋转。
 
-###### 话题 `/odom` 和框架 `/odom` 的对比
+##### 话题 `/odom` 和框架 `/odom` 的对比
 - 示例中使用了 `TransformListener` 去访问测量信息，并未通过订阅 `/odom` 话题获取测量信息。因为发布在 `/odom` 话题的数据并不完全。
 - 例如，Turtlebot 使用了单轴陀螺仪额外估算机器人的旋转数据，在 `robot_pose_ekf` 节点该数据与轮子编码器的数据进行合并，从而实现对旋转更精确的估算过程。
 - `robot_pose_ekf` 并不会将估算结果重新发布至 `/odom`  话题下,而是发布至 `/odom_combined` 话题下。并且发布时的消息格式更改为 `geometry_msgs/PoseWithCovarianceStamped`， 并非原先的 `nav_msgs/Odometry`。
 - 总体来说，使用 `tf` 监听 `/odom` 和 `/base_link`（或是`/base_footprint`) 之间的转换比单纯依赖 `/odom` 话题的消息更为安全。
+
+
+#### 导航、路径规划和 SLAM
+- SLAM 全称为实时定位与绘制地图（Simultaneous Localization and Mapping）。支持 SLAM 的机器人可以为一个未知的环境绘制地图，并实时地定位自身在地图上的位置。
+- 可以使用激光扫描仪收集数据来进行地图绘制，但成本高。另一种更为经济的 SLAM 实现方法通过摄像头（Microsoft Kinect， Asus Xtion等）构建三维点云（point cloud）来模拟激光扫描仪数据，并绘制地图。
+
+##### 关于移动路径规划包 `move_base`
+
+- 包 [move_base](http://wiki.ros.org/move_base) 实现了根据给定终点规划机器人移动路径并指挥其进行移动的功能。该包提供了 `move_base` 节点，该节点是导航栈的主要组成部分，包括了全局和局部路径规划，全局和局部代价地图以及恢复行为几部分。导航栈的组成如下图所示。
+
+![ROS Navigation Stack](overview_tf.png)
+
+- `move_base` 节点提供了一个 ROS 的接口，该接口可以用来配置，运行机器人的导航栈，也可以用于和导航栈进行交互。图上表示了 `move_base` 节点和系统其他部分进行交互的过程。其中蓝色的部分在各机器人平台上有所不同，灰色的部分可选但提供给所有系统。白色部分是必需的。
+
+- `move_base` 节点订阅了 `move_base_simple/goal` 话题，用于监听指定的终点信息。该话题消息格式为 `geometry_msgs/PoseStamped`。
+
+- 该节点输出发布在 `cmd_vel` 话题下，包含用于指挥机器人运动速度的一系列信息。话题消息格式为 `geometry_msgs/Twist`。
+
+- 当移动过程中出现了障碍物阻止机器人继续前进时， `move_base` 会启动恢复过程，清除路径上的障碍物，一般恢复过程流程如下：
+- 首先对于用户指定的区域外的障碍物会从机器人的地图上清除，之后，在允许的条件下，机器人会原地旋转以清除周围的障碍物。如果上述动作仍不能解决问题，机器人会采取更为激进的方法清除其原地旋转的矩形区域之外的障碍物，之后原地旋转一次。若上述方式仍失败，机器人认定其终点无法到达，并提示用户运动过程已终止。该过程可以通过调整 `recovery_behaviors` 参数进行调整，或通过更改 `recovery_behavior_enabled` 参数来禁用该过程。
+
+#### 机器人视觉
+
+- 机器视觉的总体目标是识别隐藏在像素组成的世界中物体的结构。每个像素都是连续状态变化的流，能够影响其变化的因素包括光线，视角，物体动作以及规则和不规则的噪音。因此机器视觉算法是为了从这些变化的值中提取出更为稳定的特征值而设计出来的。特征可能是边角，特定区域，或是颜色和动作等。从图片或视频中提取出稳定特征的集合后，便可以对其进行进行追踪，或是将某些特征进行合并，以实现对象侦测和识别。
+
+- 当前机器视觉的三大支柱是 `OpenCV`, `OpenNI2 + OpenKinect` 和 `PCL`。 `OpenCV` 用于处理2D图像和机器学习；`OpenNI2 + OpenKinect` 提供深度摄像头的驱动，例如 Microsoft Kinect 和 Asus Xtion Pro； `PCL` 全称为 `Point Cloud Library` ，是用于处理 3D 点云的一个库。
 
